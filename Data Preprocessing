@@ -1,0 +1,50 @@
+import pandas as pd
+import numpy as np
+from scipy.spatial.distance import cdist
+
+# Read csv file
+file_path = "STDM-Assignment/MTA_Subway_Hourly_Ridership__2020-2024_20250130.csv"
+df = pd.read_csv(file_path)
+
+# Transform 'transit_timestamp' to timestamp
+df['transit_timestamp'] = pd.to_datetime(df['transit_timestamp'], format = '%m/%d/%Y %I:%M:%S %p')
+# Make 'transit_timestamp' index
+df.set_index('transit_timestamp', inplace=True)
+
+# Check if there is null
+if df.isnull().sum().sum() > 0:
+    df['ridership'].fillna(method='ffill', inplace=True)  # First, replace the null with formal
+    df['ridership'].interpolate(method='linear', inplace=True)  # Second, interpolation smoothing
+else:
+    print('Not Null')
+
+# Generate temporal feature
+df['hour'] = df.index.hour
+df['day_of_week'] = df.index.dayofweek  # 0=Monday, 6=Sunday
+df['is_weekend'] = df['day_of_week'].apply(lambda x: 1 if x >= 5 else 0)  # if it is weekend
+df['day_of_month'] = df.index.day
+
+# Generate spatial feature
+stations = df[['station_complex_id', 'latitude', 'longitude']].drop_duplicates()
+stations = stations.drop_duplicates(subset=['station_complex_id'], keep='first')
+stations = stations.set_index('station_complex_id')  # reset index
+stations = stations[~stations.index.duplicated(keep='first')].reset_index()
+
+
+# Calculate the distance between stations (Unit: km)
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371.0088
+    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+    delta_phi = np.radians(lat2 - lat1)
+    delta_lambda = np.radians(lon2 - lon1)
+
+    a = np.sin(delta_phi / 2.0) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(delta_lambda / 2.0) ** 2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+
+    return R * c
+
+# Calculate the distance matrix
+stations['neighboring_stations'] = stations.apply(
+    lambda row: {r['station_complex_id']: haversine(row['latitude'], row['longitude'], r['latitude'], r['longitude'])
+                 for _, r in stations[stations['station_complex_id'] != row['station_complex_id']].iterrows()}, axis=1)
+
