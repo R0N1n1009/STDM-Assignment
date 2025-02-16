@@ -27,7 +27,7 @@ class DataPreprocessor:
         self.df['is_weekend'] = self.df['day_of_week'].apply(lambda x: 1 if x >= 5 else 0)  # if it is weekend
         self.df['day_of_month'] = self.df.index.day
 
-    def haversine(lat1, lon1, lat2, lon2):
+    def haversine(self, lat1, lon1, lat2, lon2):
         R = 6371.0088
         phi1, phi2 = np.radians(lat1), np.radians(lat2)
         delta_phi = np.radians(lat2 - lat1)
