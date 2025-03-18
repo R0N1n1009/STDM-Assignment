@@ -2,143 +2,120 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 from pmdarima import auto_arima
 
+# 🔹 **Data Preprocessing**
+df = pd.read_csv("D:/ucl/Spatial-Temporal Data Analysis and Data Mining/STDMAssignment/STDM-Assignment/Data5.csv",
+                 parse_dates=['transit_timestamp'],
+                 date_format='%m/%d/%Y %I:%M:%S %p')
 
-# 🔹 **数据预处理**
-df = pd.read_csv("D:/ucl/Spatial-Temporal Data Analysis and Data Mining/STDMAssignment/STDM-Assignment/Data.csv",
-                     parse_dates=['transit_timestamp'],
-                     date_format='%m/%d/%Y %I:%M:%S %p')
-
-# 设置时间索引
+# Set the timestamp as the index
 df.set_index('transit_timestamp', inplace=True)
 
+# Aggregate ridership data by timestamp
+df_grouped = df.groupby('transit_timestamp')['ridership'].sum()
+df_grouped.index = pd.to_datetime(df_grouped.index)  # Ensure correct datetime format
 
+# Resample data to hourly intervals
 hourly_ridership = df.resample("H")["ridership"].sum()
 
+# 🔹 **Plot ACF and PACF**
+plt.figure(figsize=(10, 5))
+plot_acf(df_grouped, lags=72, title=None)
+plt.xlabel("Lag (hours)", fontsize=12)
+plt.ylabel("ACF", fontsize=12)
+plt.savefig("acf.png", dpi=666, bbox_inches='tight')
+plt.show()
 
-# 🔹 **转换为时间序列**
-ts = hourly_ridership
+plt.figure(figsize=(10, 5))
+plot_pacf(df_grouped, lags=72, title=None)
+plt.xlabel("Lag (hours)", fontsize=12)
+plt.ylabel("ST-ACF", fontsize=12)
+plt.savefig("pacf.png", dpi=666, bbox_inches='tight')
+plt.show()
 
-# 🔹 **划分训练集和测试集（按小时）**
-train_hours = 25 * 24  # 25 天的小时数据
-test_hours = 5 * 24  # 预测未来 6 天
+# 🔹 **Automatically select SARIMA parameters**
+auto_sarima_model = auto_arima(df_grouped,
+                               seasonal=True,  # Enable seasonality
+                               m=24,  # Set seasonal period (e.g., 24 hours for daily cycles)
+                               trace=True,  # Show search process
+                               suppress_warnings=True,
+                               stepwise=True,  # Use stepwise parameter selection
+                               n_jobs=1,  # Run sequentially
+                               )
 
-train = ts.iloc[:train_hours]
-test = ts.iloc[train_hours:train_hours + test_hours]
+print(auto_sarima_model.summary())  # Output the optimal SARIMA parameters
 
-# # 🔹 **自动选择最佳 ARIMA 参数**
-# arima_model = auto_arima(train,
-#                          seasonal=False,
-#                          trace=True,
-#                          suppress_warnings=True,
-#                          error_action='ignore',
-#                          stepwise=True)
+# Retrieve optimal (p,d,q) and (P,D,Q,m) values
+p, q, d = auto_sarima_model.order
+P, Q, D, s = auto_sarima_model.seasonal_order
 
-# print(f'Best ARIMA Model Order: {arima_model.order}')
+# 🔹 **Split data into training and testing sets**
+train_hours = 28 * 24  # 28 days for training
+test_hours = 3 * 24  # 3 days for testing
 
-# 🔹 **训练最终 ARIMA 模型**
-model_manual = ARIMA(train, order=(24, 1, 24))
-model_manual_fit = model_manual.fit()
+train = hourly_ridership.iloc[:train_hours]
+test = hourly_ridership.iloc[train_hours:train_hours + test_hours]
+
+# # 🔹 **SARIMA model with manually selected parameters**
+# sarima_model = SARIMAX(train,
+#                        order=(1, 0, 2),
+#                        seasonal_order=(1, 0, 2, 24),
+#                        enforce_stationarity=False,
+#                        enforce_invertibility=False)
 #
-# model = ARIMA(train, order=arima_model.order)
-# model_fit = model.fit()
+# sarima_fit = sarima_model.fit()
+# print(sarima_fit.summary())
 
-# 🔹 **生成预测**
-forecast = model_manual_fit.forecast(steps=test_hours)
-forecast_index = pd.date_range(start=train.index[-1] + pd.Timedelta(hours=1), periods=test_hours, freq="H")
+# 🔹 **Train SARIMA model with auto-selected parameters**
+sarima_model = SARIMAX(train,
+                       order=(p, q, d),
+                       seasonal_order=(P, Q, D, s),
+                       enforce_stationarity=False,
+                       enforce_invertibility=False)
 
-# 🔹 **可视化结果**
-# plt.figure(figsize=(12, 6))
-# ax = plt.gca()
-# plt.plot(train.index, train, label='Training Data')
-# plt.plot(test.index, test, label='Actual Data', color='green')
-# plt.plot(forecast_index, forecast, label='ARIMA Forecast', color='red', linestyle="--")
-#
-# # 🔹 **设置 X 轴格式**
-# ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))  # 每天显示一个刻度
-# ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
-# plt.xticks(rotation=45)
-#
-# plt.title('Hourly NYC Subway Ridership Forecast (ARIMA)')
-# plt.xlabel('Time')
-# plt.ylabel('Hourly Ridership')
-# plt.legend()
-# plt.grid(True)
-# plt.tight_layout()
-# plt.show()
+sarima_fit = sarima_model.fit()
+print(sarima_fit.summary())
 
+# 🔹 **Generate forecast**
+forecast = sarima_fit.get_forecast(steps=test_hours)
+forecast_values = forecast.predicted_mean
 
-# 🔹 **计算评估指标**
-mae = np.mean(np.abs(forecast - test))
-mse = np.mean((forecast - test) ** 2)
-rmse = np.sqrt(mse)
-
-print(f'MAE: {mae:.2f}')
-print(f'MSE: {mse:.2f}')
-print(f'RMSE: {rmse:.2f}')
-
-
-# plt.figure(figsize=(12, 6))
-# ax = plt.gca()
-#
-# # 🔹 **绘制训练数据（如果你想完全隐藏训练数据，这行可以注释掉）**
-# # plt.plot(train.index, train, label='Training Data', alpha=0.3)  # 透明度降低
-#
-# # 🔹 **绘制测试数据**
-# plt.plot(test.index, test, label='Actual Data', color='green')
-#
-# # 🔹 **绘制预测数据**
-# plt.plot(forecast_index, forecast, label='ARIMA Forecast', color='red', linestyle="--")
-#
-# # **设置 x 轴格式，使其以小时为单位**
-# ax.xaxis.set_major_locator(mdates.HourLocator(interval=6))  # 每 6 小时显示一个刻度
-# ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))  # 显示格式为 "小时:分钟"
-#
-# # ✅ **只显示测试数据和预测数据的部分**
-# plt.xlim(test.index.min(), forecast_index.max())  # 只显示测试和预测部分
-#
-# plt.xticks(rotation=45)
-# plt.title('Hourly NYC Subway Ridership Forecast (ARIMA)')
-# plt.xlabel('Hour')
-# plt.ylabel('Hourly Ridership')
-# plt.legend()
-# plt.grid(True)
-# plt.tight_layout()
-# plt.show()
-
+# 🔹 **Plot forecast results**
 plt.figure(figsize=(12, 6))
 ax = plt.gca()
 
-# 🔹 **生成 0 ~ 120 作为新的 x 轴**
-x_test = np.arange(len(test))  # 测试数据横坐标 (0 ~ 120)
-x_forecast = np.arange(len(forecast))  # 预测数据横坐标 (120 ~ 240)
+# Generate new x-axis index
+x_test = np.arange(len(test))  # Test data x-axis (0 ~ 72)
+x_forecast = np.arange(len(forecast_values))  # Forecasted data x-axis
 
-# 🔹 **绘制测试数据**
+# Plot actual test data
 plt.plot(x_test, test, label='Actual Data', color='green')
 
-# 🔹 **绘制预测数据**
-plt.plot(x_forecast, forecast, label='ARIMA Forecast', color='red', linestyle="--")
+# Plot forecasted data
+plt.plot(x_forecast, forecast_values, label='SARIMA Forecast', color='red', linestyle="--")
 
-# ✅ **手动设置横坐标刻度**
-plt.xticks(np.arange(0, len(test) + len(forecast) + 1, step=12))  # 每 12 小时一个刻度
-plt.xlim(0, len(test))  # 只显示 0~120 小时
+# ✅ **Manually adjust x-axis ticks**
+plt.xticks(np.arange(0, len(test) + len(forecast_values) + 1, step=12))  # Tick every 12 hours
+plt.xlim(0, len(test))  # Display only test data range
 
-plt.xlabel('Hours (0-120)')
+plt.xlabel('Hours (0-72)')
 plt.ylabel('Hourly Ridership')
-plt.title('Hourly NYC Subway Ridership Forecast (ARIMA)')
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
+plt.savefig("SARIMA.png", dpi=666, bbox_inches='tight')
 plt.show()
 
-
-# 🔹 **计算评估指标**
-mae = np.mean(np.abs(forecast - test))
-mse = np.mean((forecast - test) ** 2)
+# 🔹 **Calculate evaluation metrics**
+mae = np.mean(np.abs(forecast_values - test))
+mse = np.mean((forecast_values - test) ** 2)
 rmse = np.sqrt(mse)
+mape = np.mean(np.abs((forecast_values - test) / test)) * 100  # Mean Absolute Percentage Error
 
 print(f'MAE: {mae:.2f}')
 print(f'MSE: {mse:.2f}')
 print(f'RMSE: {rmse:.2f}')
+print(f'MAPE: {mape:.2f}%')
